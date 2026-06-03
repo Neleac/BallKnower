@@ -1,0 +1,208 @@
+from __future__ import annotations
+
+import json
+import mimetypes
+from json import JSONDecodeError
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+from urllib.parse import urlparse
+
+try:
+    from nba_api.live.nba.endpoints import scoreboard
+    scoreboard_import_error = None
+except Exception as exc:  # pragma: no cover - reported through /api/scoreboard
+    scoreboard = None
+    scoreboard_import_error = exc
+
+
+ROOT = Path(__file__).resolve().parent
+HOST = "127.0.0.1"
+PORT = 8000
+NBA_CDN_SCOREBOARD_URL = "https://cdn.nba.com/static/json/liveData/scoreboard/todaysScoreboard_00.json"
+NBA_S3_SCOREBOARD_URL = "https://nba-prod-us-east-1-mediaops-stats.s3.amazonaws.com/NBA/liveData/scoreboard/todaysScoreboard_00.json"
+NBA_REQUEST_HEADERS = {
+    "Accept": "application/json,text/plain,*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/125.0.0.0 Safari/537.36"
+    ),
+}
+
+
+def _value(data: dict[str, Any], *keys: str, default: Any = "") -> Any:
+    for key in keys:
+        value = data.get(key)
+        if value not in (None, ""):
+            return value
+    return default
+
+
+def _team(data: dict[str, Any]) -> dict[str, Any]:
+    city = _value(data, "teamCity", "city")
+    name = _value(data, "teamName", "name")
+    code = _value(data, "teamTricode", "tricode", "teamCode", default="NBA")
+    return {
+        "id": _value(data, "teamId", "id"),
+        "code": str(code).upper(),
+        "name": name or code,
+        "fullName": f"{city} {name}".strip() or code,
+        "score": int(_value(data, "score", default=0) or 0),
+        "wins": _value(data, "wins", default=None),
+        "losses": _value(data, "losses", default=None),
+    }
+
+
+def _start_time(game: dict[str, Any]) -> str:
+    raw = _value(game, "gameTimeUTC", "gameTimeLocal", "gameEt")
+    if not raw:
+        return _value(game, "gameStatusText", default="TBD")
+    try:
+        cleaned = str(raw).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(cleaned)
+        local = dt.astimezone()
+        return local.strftime("%I:%M %p").lstrip("0")
+    except Exception:
+        return str(raw)
+
+
+def _normalize_game(game: dict[str, Any], fetched_at: str) -> dict[str, Any]:
+    arena = game.get("arena") or {}
+    if isinstance(arena, dict):
+        arena_name = _value(arena, "arenaName", "name")
+    else:
+        arena_name = ""
+
+    away = _team(game.get("awayTeam") or {})
+    home = _team(game.get("homeTeam") or {})
+
+    return {
+        "gameId": _value(game, "gameId", "id"),
+        "status": int(_value(game, "gameStatus", default=0) or 0),
+        "statusText": _value(game, "gameStatusText", default="Scheduled"),
+        "period": int(_value(game, "period", default=0) or 0),
+        "clock": _value(game, "gameClock", "clock"),
+        "startTime": _start_time(game),
+        "arena": arena_name,
+        "away": away,
+        "home": home,
+        "fetchedAt": fetched_at,
+    }
+
+
+def _fetch_json_url(url: str) -> dict[str, Any]:
+    request = Request(url, headers=NBA_REQUEST_HEADERS)
+    try:
+        with urlopen(request, timeout=10) as response:
+            status = response.status
+            body = response.read()
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")[:240].strip()
+        raise RuntimeError(f"HTTP {exc.code} from {url}: {body}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"Unable to reach {url}: {exc.reason}") from exc
+
+    text = body.decode("utf-8", errors="replace")
+    try:
+        return json.loads(text)
+    except JSONDecodeError as exc:
+        sample = text[:240].strip()
+        raise RuntimeError(f"HTTP {status} from {url}, but response was not JSON: {sample}") from exc
+
+
+def _load_scoreboard_payload() -> tuple[dict[str, Any], str]:
+    try:
+        board = scoreboard.ScoreBoard()
+        return board.get_dict(), "nba_api.live.nba.endpoints.scoreboard.ScoreBoard"
+    except JSONDecodeError as exc:
+        print(f"nba_api CDN parse error, trying NBA S3 fallback: {exc}")
+        payload = _fetch_json_url(NBA_S3_SCOREBOARD_URL)
+        return payload, "nba_api live scoreboard fallback via NBA S3 mirror"
+
+
+def get_scoreboard() -> dict[str, Any]:
+    if scoreboard is None:
+        reason = f": {scoreboard_import_error}" if scoreboard_import_error else ""
+        raise RuntimeError(f"nba_api import failed{reason}. Run: pip install -r requirements.txt")
+
+    fetched_at = datetime.now(timezone.utc).isoformat()
+    try:
+        payload, source = _load_scoreboard_payload()
+    except RuntimeError:
+        raise
+    except JSONDecodeError as exc:
+        raise RuntimeError(
+            "nba_api received a non-JSON response from the NBA live scoreboard feed. "
+            f"Check that this machine can open {NBA_CDN_SCOREBOARD_URL} or {NBA_S3_SCOREBOARD_URL}. "
+            f"Original parse error: {exc}"
+        ) from exc
+
+    games = payload.get("scoreboard", {}).get("games", [])
+
+    normalized = [_normalize_game(game, fetched_at) for game in games]
+    normalized.sort(key=lambda game: (game["status"] != 2, game["startTime"], game["gameId"]))
+
+    return {
+        "source": source,
+        "fetchedAt": fetched_at,
+        "gameDate": payload.get("scoreboard", {}).get("gameDate"),
+        "games": normalized,
+    }
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/scoreboard":
+            self._send_scoreboard()
+            return
+
+        self._send_static(parsed.path)
+
+    def _send_scoreboard(self) -> None:
+        try:
+            body = json.dumps(get_scoreboard()).encode("utf-8")
+            self._send(200, body, "application/json; charset=utf-8")
+        except Exception as exc:
+            print(f"Scoreboard error: {exc}")
+            body = json.dumps({"error": str(exc), "games": []}).encode("utf-8")
+            self._send(503, body, "application/json; charset=utf-8")
+
+    def _send_static(self, request_path: str) -> None:
+        relative = "index.html" if request_path in ("", "/") else request_path.lstrip("/")
+        target = (ROOT / relative).resolve()
+        if ROOT not in target.parents and target != ROOT:
+            self._send(403, b"Forbidden", "text/plain; charset=utf-8")
+            return
+        if not target.is_file():
+            self._send(404, b"Not found", "text/plain; charset=utf-8")
+            return
+
+        content_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+        self._send(200, target.read_bytes(), content_type)
+
+    def _send(self, status: int, body: bytes, content_type: str) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: Any) -> None:
+        print("%s - %s" % (self.address_string(), format % args))
+
+
+def main() -> None:
+    server = ThreadingHTTPServer((HOST, PORT), Handler)
+    print(f"BallKnower serving on http://{HOST}:{PORT}")
+    server.serve_forever()
+
+
+if __name__ == "__main__":
+    main()

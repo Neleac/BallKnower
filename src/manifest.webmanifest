@@ -1,0 +1,16 @@
+{
+  "name": "BallKnower",
+  "short_name": "BallKnower",
+  "description": "Meta Display Glasses app for live NBA scores.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#101114",
+  "icons": [
+    {
+      "src": "favicon.png",
+      "sizes": "128x128",
+      "type": "image/png"
+    }
+  ]
+}
