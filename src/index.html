@@ -30,31 +30,31 @@
 
         <article id="game-card" class="game-card hidden">
           <div class="game-meta-row">
-            <span id="game-status" class="game-status">Pregame</span>
-            <span id="game-count">0 of 0</span>
+            <span id="game-status" class="game-status"></span>
+            <span id="game-clock" class="game-clock"></span>
+            <span id="game-count"></span>
           </div>
 
-          <div class="team-row" id="away-row">
-            <div class="team-label">
-              <span id="away-code" class="team-code">AWY</span>
-              <span id="away-name" class="team-name">Away</span>
+          <div class="matchup-row">
+            <div class="team-row" id="away-row">
+              <div class="team-label">
+                <span id="away-code" class="team-code"></span>
+                <span id="away-name" class="team-name"></span>
+              </div>
+              <div id="away-score" class="team-score"></div>
             </div>
-            <div id="away-score" class="team-score">0</div>
-          </div>
 
-          <div class="divider"></div>
-
-          <div class="team-row" id="home-row">
-            <div class="team-label">
-              <span id="home-code" class="team-code">HME</span>
-              <span id="home-name" class="team-name">Home</span>
+            <div class="team-row" id="home-row">
+              <div class="team-label">
+                <span id="home-code" class="team-code"></span>
+                <span id="home-name" class="team-name"></span>
+              </div>
+              <div id="home-score" class="team-score"></div>
             </div>
-            <div id="home-score" class="team-score">0</div>
           </div>
 
           <div class="game-footer">
-            <span id="game-clock">Tonight</span>
-            <span id="game-arena"></span>
+            <div id="play-by-play" class="play-by-play hidden" aria-live="polite"></div>
           </div>
         </article>
       </main>

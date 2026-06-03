@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import re
 from json import JSONDecodeError
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -9,7 +10,7 @@ from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 try:
     from nba_api.live.nba.endpoints import scoreboard
@@ -18,12 +19,21 @@ except Exception as exc:  # pragma: no cover - reported through /api/scoreboard
     scoreboard = None
     scoreboard_import_error = exc
 
+try:
+    from nba_api.live.nba.endpoints import playbyplay
+    playbyplay_import_error = None
+except Exception as exc:  # pragma: no cover - reported through /api/playbyplay
+    playbyplay = None
+    playbyplay_import_error = exc
+
 
 ROOT = Path(__file__).resolve().parent
 HOST = "127.0.0.1"
 PORT = 8000
 NBA_CDN_SCOREBOARD_URL = "https://cdn.nba.com/static/json/liveData/scoreboard/todaysScoreboard_00.json"
 NBA_S3_SCOREBOARD_URL = "https://nba-prod-us-east-1-mediaops-stats.s3.amazonaws.com/NBA/liveData/scoreboard/todaysScoreboard_00.json"
+NBA_CDN_PLAYBYPLAY_URL = "https://cdn.nba.com/static/json/liveData/playbyplay/playbyplay_{game_id}.json"
+NBA_S3_PLAYBYPLAY_URL = "https://nba-prod-us-east-1-mediaops-stats.s3.amazonaws.com/NBA/liveData/playbyplay/playbyplay_{game_id}.json"
 NBA_REQUEST_HEADERS = {
     "Accept": "application/json,text/plain,*/*",
     "Accept-Language": "en-US,en;q=0.9",
@@ -58,6 +68,20 @@ def _team(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _format_clock(clock: Any) -> str:
+    if not clock:
+        return ""
+
+    text = str(clock).strip()
+    match = re.fullmatch(r"PT(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?", text)
+    if not match:
+        return text
+
+    minutes = int(match.group(1) or 0)
+    seconds = int(float(match.group(2) or 0))
+    return f"{minutes}:{seconds:02d}"
+
+
 def _start_time(game: dict[str, Any]) -> str:
     raw = _value(game, "gameTimeUTC", "gameTimeLocal", "gameEt")
     if not raw:
@@ -86,7 +110,7 @@ def _normalize_game(game: dict[str, Any], fetched_at: str) -> dict[str, Any]:
         "status": int(_value(game, "gameStatus", default=0) or 0),
         "statusText": _value(game, "gameStatusText", default="Scheduled"),
         "period": int(_value(game, "period", default=0) or 0),
-        "clock": _value(game, "gameClock", "clock"),
+        "clock": _format_clock(_value(game, "gameClock", "clock")),
         "startTime": _start_time(game),
         "arena": arena_name,
         "away": away,
@@ -125,6 +149,55 @@ def _load_scoreboard_payload() -> tuple[dict[str, Any], str]:
         return payload, "nba_api live scoreboard fallback via NBA S3 mirror"
 
 
+def _load_playbyplay_payload(game_id: str) -> tuple[dict[str, Any], str]:
+    try:
+        game_playbyplay = playbyplay.PlayByPlay(game_id)
+        return game_playbyplay.get_dict(), "nba_api.live.nba.endpoints.playbyplay.PlayByPlay"
+    except JSONDecodeError as exc:
+        print(f"nba_api play-by-play CDN parse error, trying NBA S3 fallback: {exc}")
+        payload = _fetch_json_url(NBA_S3_PLAYBYPLAY_URL.format(game_id=game_id))
+        return payload, "nba_api live play-by-play fallback via NBA S3 mirror"
+
+
+def _normalize_action(action: dict[str, Any]) -> dict[str, Any] | None:
+    description = str(_value(action, "description")).strip()
+    if not description:
+        return None
+
+    try:
+        period = int(_value(action, "period", default=0) or 0)
+    except (TypeError, ValueError):
+        period = 0
+
+    return {
+        "actionNumber": _value(action, "actionNumber", default=None),
+        "orderNumber": _value(action, "orderNumber", default=None),
+        "period": period,
+        "clock": _format_clock(_value(action, "clock")),
+        "description": description,
+        "teamTricode": _value(action, "teamTricode"),
+        "scoreAway": _value(action, "scoreAway"),
+        "scoreHome": _value(action, "scoreHome"),
+        "actionType": _value(action, "actionType"),
+        "subType": _value(action, "subType"),
+    }
+
+
+def _play_text(action: dict[str, Any] | None) -> str:
+    if not action:
+        return ""
+
+    prefix = ""
+    if action["period"] and action["clock"]:
+        prefix = f"Q{action['period']} {action['clock']}"
+    elif action["period"]:
+        prefix = f"Q{action['period']}"
+    elif action["clock"]:
+        prefix = action["clock"]
+
+    return f"{prefix} {action['description']}".strip()
+
+
 def get_scoreboard() -> dict[str, Any]:
     if scoreboard is None:
         reason = f": {scoreboard_import_error}" if scoreboard_import_error else ""
@@ -155,11 +228,55 @@ def get_scoreboard() -> dict[str, Any]:
     }
 
 
+def get_playbyplay(game_id: str) -> dict[str, Any]:
+    game_id = str(game_id or "").strip()
+    if not game_id:
+        raise ValueError("gameId is required")
+
+    if playbyplay is None:
+        reason = f": {playbyplay_import_error}" if playbyplay_import_error else ""
+        raise RuntimeError(f"nba_api play-by-play import failed{reason}. Run: pip install -r requirements.txt")
+
+    fetched_at = datetime.now(timezone.utc).isoformat()
+    try:
+        payload, source = _load_playbyplay_payload(game_id)
+    except RuntimeError:
+        raise
+    except JSONDecodeError as exc:
+        raise RuntimeError(
+            "nba_api received a non-JSON response from the NBA live play-by-play feed. "
+            f"Check that this machine can open {NBA_CDN_PLAYBYPLAY_URL.format(game_id=game_id)} "
+            f"or {NBA_S3_PLAYBYPLAY_URL.format(game_id=game_id)}. "
+            f"Original parse error: {exc}"
+        ) from exc
+
+    actions = payload.get("game", {}).get("actions", [])
+    normalized = [
+        normalized_action
+        for action in actions
+        if isinstance(action, dict)
+        for normalized_action in [_normalize_action(action)]
+        if normalized_action
+    ]
+    latest_action = normalized[-1] if normalized else None
+
+    return {
+        "source": source,
+        "gameId": game_id,
+        "fetchedAt": fetched_at,
+        "latestAction": latest_action,
+        "playByPlayText": _play_text(latest_action),
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/scoreboard":
             self._send_scoreboard()
+            return
+        if parsed.path == "/api/playbyplay":
+            self._send_playbyplay(parsed.query)
             return
 
         self._send_static(parsed.path)
@@ -171,6 +288,19 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:
             print(f"Scoreboard error: {exc}")
             body = json.dumps({"error": str(exc), "games": []}).encode("utf-8")
+            self._send(503, body, "application/json; charset=utf-8")
+
+    def _send_playbyplay(self, query: str) -> None:
+        game_id = parse_qs(query).get("gameId", [""])[0]
+        try:
+            body = json.dumps(get_playbyplay(game_id)).encode("utf-8")
+            self._send(200, body, "application/json; charset=utf-8")
+        except ValueError as exc:
+            body = json.dumps({"error": str(exc), "playByPlayText": ""}).encode("utf-8")
+            self._send(400, body, "application/json; charset=utf-8")
+        except Exception as exc:
+            print(f"Play-by-play error: {exc}")
+            body = json.dumps({"error": str(exc), "playByPlayText": ""}).encode("utf-8")
             self._send(503, body, "application/json; charset=utf-8")
 
     def _send_static(self, request_path: str) -> None:

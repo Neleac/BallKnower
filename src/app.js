@@ -3,13 +3,21 @@
 
   var CONFIG = {
     endpoint: "/api/scoreboard",
+    playByPlayEndpoint: "/api/playbyplay",
     refreshMs: 30000,
+    playByPlayRefreshMs: 15000,
     cacheKey: "ballknower:lastScoreboard",
   };
 
   var state = {
     games: [],
     selectedIndex: 0,
+    scorePosition: "center",
+    playByPlayText: "",
+    playByPlayGameId: "",
+    playByPlayLoading: false,
+    playByPlayTimer: null,
+    lastSpokenPlayByPlayText: "",
     loading: false,
     timer: null,
   };
@@ -29,8 +37,17 @@
           selectGame(state.selectedIndex + 1);
           event.preventDefault();
           break;
+        case "ArrowUp":
+          setScorePosition("up");
+          event.preventDefault();
+          break;
+        case "ArrowDown":
+          setScorePosition("center");
+          event.preventDefault();
+          break;
         case "Enter":
           loadScoreboard({ force: true });
+          loadPlayByPlay({ force: true });
           event.preventDefault();
           break;
       }
@@ -39,9 +56,12 @@
     document.addEventListener("visibilitychange", function() {
       if (document.hidden) {
         stopAutoRefresh();
+        stopPlayByPlayRefresh();
+        stopPlayByPlaySpeech();
       } else {
         loadScoreboard({ silent: true });
         startAutoRefresh();
+        startPlayByPlayRefresh();
       }
     });
   }
@@ -108,33 +128,43 @@
     state.games = Array.isArray(data.games) ? data.games : [];
     if (state.selectedIndex >= state.games.length) state.selectedIndex = 0;
     renderCurrentGame(data, options);
+    loadPlayByPlay({ silent: true });
   }
 
   function selectGame(index) {
     if (state.games.length === 0) return;
     state.selectedIndex = (index + state.games.length) % state.games.length;
     renderCurrentGame();
+    loadPlayByPlay({ force: true });
+  }
+
+  function getCurrentGame() {
+    return state.games.length > 0 ? state.games[state.selectedIndex] : null;
   }
 
   function renderCurrentGame(data, options) {
     var games = state.games;
-    var game = games[state.selectedIndex];
-    var hasGames = Boolean(game);
+    var hasGames = games.length > 0;
+    var game = getCurrentGame();
 
-    $("game-card").classList.toggle("hidden", !hasGames);
-    $("empty-state").classList.toggle("hidden", hasGames);
-
-    if (!hasGames) {
-      setPill(options && options.cached ? "Cached" : "No games", "");
-      $("game-count").textContent = "0 of 0";
+    if (!game) {
+      setHidden("game-card", true);
+      setHidden("empty-state", false);
+      state.playByPlayText = "";
+      state.playByPlayGameId = "";
+      stopPlayByPlaySpeech();
       return;
     }
 
+    setHidden("game-card", false);
+    setHidden("empty-state", true);
+
     var status = statusLabel(game);
+    applyScorePosition();
     setPill(status.compact, status.isLive ? "live" : "");
     $("game-status").textContent = status.label;
     $("game-status").classList.toggle("live", status.isLive);
-    $("game-count").textContent = (state.selectedIndex + 1) + " of " + games.length;
+    $("game-count").textContent = hasGames ? (state.selectedIndex + 1) + " of " + games.length : "0 of 0";
 
     $("away-code").textContent = game.away.code;
     $("away-name").textContent = game.away.name;
@@ -143,7 +173,7 @@
     $("home-name").textContent = game.home.name;
     $("home-score").textContent = scoreText(game.home.score);
     $("game-clock").textContent = gameClock(game);
-    $("game-arena").textContent = game.arena || "";
+    renderPlayByPlay(game);
 
     $("away-row").classList.toggle("leading", Number(game.away.score) > Number(game.home.score));
     $("home-row").classList.toggle("leading", Number(game.home.score) > Number(game.away.score));
@@ -171,19 +201,172 @@
     return Number.isFinite(score) ? String(score) : "0";
   }
 
+  function loadPlayByPlay(options) {
+    options = options || {};
+    if (state.scorePosition !== "up") return;
+
+    var game = getCurrentGame();
+    var gameId = game && game.gameId;
+    if (!gameId) {
+      setPlayByPlay("", "");
+      return;
+    }
+    if (state.playByPlayLoading) return;
+
+    state.playByPlayLoading = true;
+    fetch(CONFIG.playByPlayEndpoint + "?gameId=" + encodeURIComponent(gameId) + "&t=" + Date.now(), {
+      cache: "no-store",
+    })
+      .then(function(response) {
+        return response.json().catch(function() {
+          return {};
+        }).then(function(data) {
+          if (!response.ok) {
+            throw new Error(data.error || ("Play-by-play service " + response.status));
+          }
+          return data;
+        });
+      })
+      .then(function(data) {
+        var current = getCurrentGame();
+        if (state.scorePosition !== "up" || !current || current.gameId !== gameId) return;
+        setPlayByPlay(data.playByPlayText || "", gameId);
+      })
+      .catch(function() {
+        var current = getCurrentGame();
+        if (state.scorePosition === "up" && current && current.gameId === gameId && state.playByPlayGameId !== gameId) {
+          setPlayByPlay("", gameId);
+        }
+      })
+      .finally(function() {
+        state.playByPlayLoading = false;
+      });
+  }
+
+  function setScorePosition(position) {
+    state.scorePosition = position === "up" ? "up" : "center";
+    applyScorePosition();
+    renderPlayByPlay();
+    if (state.scorePosition === "up") {
+      startPlayByPlayRefresh();
+    } else {
+      stopPlayByPlaySpeech();
+      stopPlayByPlayRefresh();
+    }
+  }
+
+  function applyScorePosition() {
+    var card = $("game-card");
+    if (!card) return;
+    card.classList.toggle("score-position-up", state.scorePosition === "up");
+  }
+
+  function setPlayByPlay(text, gameId) {
+    state.playByPlayGameId = gameId || "";
+    state.playByPlayText = text || "";
+    renderPlayByPlay(getCurrentGame());
+  }
+
+  function renderPlayByPlay(game) {
+    var play = $("play-by-play");
+    if (!play) return;
+
+    var shouldShow = state.scorePosition === "up";
+    play.classList.toggle("hidden", !shouldShow);
+    play.setAttribute("aria-hidden", shouldShow ? "false" : "true");
+    if (!shouldShow) return;
+
+    if (game && game.gameId && state.playByPlayGameId === game.gameId) {
+      renderPlayByPlayText(play, state.playByPlayText || "");
+    } else {
+      renderPlayByPlayText(play, (game && game.playByPlayText) || "");
+    }
+  }
+
+  function renderPlayByPlayText(play, text) {
+    fitPlayByPlayText(play, text);
+    speakPlayByPlay(text);
+  }
+
+  function playTextSize(text) {
+    var length = String(text || "").replace(/\s+/g, " ").trim().length;
+    if (length <= 42) return 46;
+    if (length <= 70) return 40;
+    if (length <= 105) return 34;
+    if (length <= 145) return 28;
+    if (length <= 200) return 22;
+    return 18;
+  }
+
+  function fitPlayByPlayText(play, text) {
+    var size = playTextSize(text);
+    play.textContent = text;
+    play.style.setProperty("--play-font-size", size + "px");
+
+    while (size > 14 && (play.scrollHeight > play.clientHeight || play.scrollWidth > play.clientWidth)) {
+      size -= 1;
+      play.style.setProperty("--play-font-size", size + "px");
+    }
+  }
+
+  function speakPlayByPlay(text) {
+    var spokenText = String(text || "").replace(/\s+/g, " ").trim();
+    if (!spokenText || state.scorePosition !== "up") return;
+    if (document.hidden) return;
+    if (spokenText === state.lastSpokenPlayByPlayText) return;
+    if (!("speechSynthesis" in window) || !("SpeechSynthesisUtterance" in window)) return;
+
+    state.lastSpokenPlayByPlayText = spokenText;
+    window.speechSynthesis.cancel();
+
+    var utterance = new SpeechSynthesisUtterance(spokenText);
+    utterance.lang = "en-US";
+    utterance.rate = 1;
+    utterance.pitch = 1;
+    window.speechSynthesis.speak(utterance);
+  }
+
+  function stopPlayByPlaySpeech() {
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
+  }
+
+  function startPlayByPlayRefresh() {
+    stopPlayByPlayRefresh();
+    if (state.scorePosition !== "up") return;
+
+    loadPlayByPlay({ force: true });
+    state.playByPlayTimer = window.setInterval(function() {
+      loadPlayByPlay({ silent: true });
+    }, CONFIG.playByPlayRefreshMs);
+  }
+
+  function stopPlayByPlayRefresh() {
+    if (state.playByPlayTimer) {
+      window.clearInterval(state.playByPlayTimer);
+      state.playByPlayTimer = null;
+    }
+  }
+
   function setLoading(isLoading) {
-    $("loading").classList.toggle("hidden", !isLoading);
+    setHidden("loading", !isLoading);
   }
 
   function setError(message) {
     $("error").classList.remove("hidden");
     $("game-card").classList.add("hidden");
-    $("empty-state").classList.add("hidden");
+    setHidden("empty-state", true);
     $("error").querySelector(".error-message").textContent = message;
   }
 
   function clearError() {
-    $("error").classList.add("hidden");
+    setHidden("error", true);
+  }
+
+  function setHidden(id, hidden) {
+    var element = $(id);
+    if (element) element.classList.toggle("hidden", hidden);
   }
 
   function setPill(text, type) {
@@ -207,6 +390,7 @@
   function init() {
     setupEvents();
     registerServiceWorker();
+    applyScorePosition();
     loadCachedScoreboard();
     loadScoreboard({ force: true });
     startAutoRefresh();
