@@ -9,6 +9,8 @@
     cacheKey: "ballknower:lastScoreboard",
   };
 
+  var OPENING_CLOCK_TEXT = "Q1 12:00";
+
   var state = {
     games: [],
     selectedIndex: 0,
@@ -18,6 +20,9 @@
     playByPlayLoading: false,
     playByPlayTimer: null,
     lastSpokenPlayByPlayText: "",
+    pendingPlayByPlaySpeech: "",
+    speechUnlocked: false,
+    speechUnlocking: false,
     loading: false,
     timer: null,
   };
@@ -38,6 +43,7 @@
           event.preventDefault();
           break;
         case "ArrowUp":
+          unlockPlayByPlaySpeech();
           setScorePosition("up");
           event.preventDefault();
           break;
@@ -46,6 +52,7 @@
           event.preventDefault();
           break;
         case "Enter":
+          unlockPlayByPlaySpeech();
           loadScoreboard({ force: true });
           loadPlayByPlay({ force: true });
           event.preventDefault();
@@ -143,8 +150,6 @@
   }
 
   function renderCurrentGame(data, options) {
-    var games = state.games;
-    var hasGames = games.length > 0;
     var game = getCurrentGame();
 
     if (!game) {
@@ -152,6 +157,9 @@
       setHidden("empty-state", false);
       state.playByPlayText = "";
       state.playByPlayGameId = "";
+      $("series-record").textContent = "";
+      $("matchup-row").classList.remove("has-series");
+      setHidden("series-record", true);
       stopPlayByPlaySpeech();
       return;
     }
@@ -162,9 +170,10 @@
     var status = statusLabel(game);
     applyScorePosition();
     setPill(status.compact, status.isLive ? "live" : "");
-    $("game-status").textContent = status.label;
-    $("game-status").classList.toggle("live", status.isLive);
-    $("game-count").textContent = hasGames ? (state.selectedIndex + 1) + " of " + games.length : "0 of 0";
+    $("game-status").textContent = gameTopLeftText(game);
+    $("game-status").classList.toggle("live", hasGameStarted(game));
+    $("game-count").textContent = seriesGameText(game);
+    renderSeriesRecord(game);
 
     $("away-code").textContent = game.away.code;
     $("away-name").textContent = game.away.name;
@@ -172,7 +181,6 @@
     $("home-code").textContent = game.home.code;
     $("home-name").textContent = game.home.name;
     $("home-score").textContent = scoreText(game.home.score);
-    $("game-clock").textContent = gameClock(game);
     renderPlayByPlay(game);
 
     $("away-row").classList.toggle("leading", Number(game.away.score) > Number(game.home.score));
@@ -190,10 +198,98 @@
     return { label: text || "Pregame", compact: "Ready", isLive: false };
   }
 
+  function gameStartTime(game) {
+    var startTime = String(game.startTime || "").trim();
+    if (!startTime || startTime === "TBD") return "TBD";
+    return startTime.replace(/\s(?:PST|PDT)$/i, "") + " PST";
+  }
+
+  function gameTopLeftText(game) {
+    return hasGameStarted(game) ? gameClock(game) : gameStartTime(game);
+  }
+
+  function seriesTextParts(game) {
+    return [
+      game.seriesGameNumber,
+      game.seriesText,
+      game.gameLabel,
+      game.gameSubLabel,
+      game.gameSubtype,
+      game.ifNecessary,
+    ].map(function(value) {
+      return String(value || "").trim();
+    }).filter(Boolean);
+  }
+
+  function isSeriesGame(game) {
+    var text = seriesTextParts(game).join(" ");
+    if (!text) return false;
+    if (String(game.seriesText || "").trim()) return true;
+    if (parsedSeriesGameNumber(game)) return true;
+    return /\b(series|playoffs?|finals?|semifinals?|conference|first round|second round)\b/i.test(text);
+  }
+
+  function parsedSeriesGameNumber(game) {
+    var raw = String(game.seriesGameNumber || "").trim();
+    var match = raw.match(/\d+/);
+    if (match && Number(match[0]) > 0) return Number(match[0]);
+
+    var parts = seriesTextParts(game);
+    for (var index = 0; index < parts.length; index += 1) {
+      match = parts[index].match(/\b(?:game|gm)\.?\s*(\d+)\b/i);
+      if (match) return Number(match[1]);
+    }
+    return 0;
+  }
+
+  function seriesGameText(game) {
+    if (!isSeriesGame(game)) return "";
+
+    var raw = String(game.seriesGameNumber || "").trim();
+    if (!raw || raw === "0") raw = seriesTextParts(game).join(" ");
+    var explicit = raw.match(/^game\s+(\d+)/i);
+    if (explicit) return "Game " + explicit[1];
+
+    var gameNumber = parsedSeriesGameNumber(game);
+    return gameNumber ? "Game " + gameNumber : "";
+  }
+
+  function seriesRecordText(game) {
+    if (!isSeriesGame(game)) return "";
+
+    var gameNumber = parsedSeriesGameNumber(game);
+    if (gameNumber === 1) return "0-0";
+
+    var parts = seriesTextParts(game);
+    for (var index = 0; index < parts.length; index += 1) {
+      var records = parts[index].match(/\b\d+\s*-\s*\d+\b/g);
+      if (records && records.length) return records[records.length - 1].replace(/\s+/g, "");
+    }
+    return "";
+  }
+
+  function renderSeriesRecord(game) {
+    var record = seriesRecordText(game);
+    $("series-record").textContent = record;
+    $("matchup-row").classList.toggle("has-series", Boolean(record));
+    setHidden("series-record", !record);
+  }
+
   function gameClock(game) {
-    if (game.period && game.clock) return "Q" + game.period + " " + game.clock;
-    if (game.period) return "Q" + game.period;
+    var status = statusLabel(game);
+    if (status.isFinal) return status.label || "Final";
+
+    var period = Number(game.period);
+    if (period && game.clock) return "Q" + period + " " + game.clock;
+    if (period) return "Q" + period;
+    if (!hasGameStarted(game)) return OPENING_CLOCK_TEXT;
     return game.startTime || "TBD";
+  }
+
+  function hasGameStarted(game) {
+    var phase = Number(game.status);
+    var text = game.statusText || "";
+    return phase === 2 || phase === 3 || /Q|Half|OT|Final|LIVE/i.test(text) || Number(game.period) > 0;
   }
 
   function scoreText(value) {
@@ -244,7 +340,10 @@
   }
 
   function setScorePosition(position) {
-    state.scorePosition = position === "up" ? "up" : "center";
+    var nextPosition = position === "up" ? "up" : "center";
+    if (state.scorePosition === nextPosition) return;
+
+    state.scorePosition = nextPosition;
     applyScorePosition();
     renderPlayByPlay();
     if (state.scorePosition === "up") {
@@ -314,19 +413,73 @@
     if (!spokenText || state.scorePosition !== "up") return;
     if (document.hidden) return;
     if (spokenText === state.lastSpokenPlayByPlayText) return;
-    if (!("speechSynthesis" in window) || !("SpeechSynthesisUtterance" in window)) return;
+    if (!canUseSpeechSynthesis()) return;
 
-    state.lastSpokenPlayByPlayText = spokenText;
-    window.speechSynthesis.cancel();
+    if (!state.speechUnlocked) {
+      state.pendingPlayByPlaySpeech = spokenText;
+      return;
+    }
 
-    var utterance = new SpeechSynthesisUtterance(spokenText);
-    utterance.lang = "en-US";
-    utterance.rate = 1;
-    utterance.pitch = 1;
-    window.speechSynthesis.speak(utterance);
+    try {
+      state.pendingPlayByPlaySpeech = "";
+      if (window.speechSynthesis.paused) window.speechSynthesis.resume();
+      window.speechSynthesis.cancel();
+
+      var utterance = new SpeechSynthesisUtterance(spokenText);
+      utterance.lang = "en-US";
+      utterance.rate = 1;
+      utterance.pitch = 1;
+      window.speechSynthesis.speak(utterance);
+      state.lastSpokenPlayByPlayText = spokenText;
+    } catch (error) {
+      state.pendingPlayByPlaySpeech = spokenText;
+    }
+  }
+
+  function canUseSpeechSynthesis() {
+    return "speechSynthesis" in window && "SpeechSynthesisUtterance" in window;
+  }
+
+  function unlockPlayByPlaySpeech() {
+    if (!canUseSpeechSynthesis()) return;
+    if (state.speechUnlocked || state.speechUnlocking) return;
+
+    state.speechUnlocking = true;
+    try {
+      if (window.speechSynthesis.paused) window.speechSynthesis.resume();
+
+      var unlockUtterance = new SpeechSynthesisUtterance(".");
+      unlockUtterance.lang = "en-US";
+      unlockUtterance.volume = 0.01;
+      unlockUtterance.rate = 1;
+      unlockUtterance.pitch = 1;
+      unlockUtterance.onend = finishSpeechUnlock;
+      unlockUtterance.onerror = finishSpeechUnlock;
+      window.speechSynthesis.speak(unlockUtterance);
+
+      window.setTimeout(function() {
+        if (state.speechUnlocking) finishSpeechUnlock();
+      }, 750);
+    } catch (error) {
+      state.speechUnlocking = false;
+    }
+  }
+
+  function finishSpeechUnlock() {
+    state.speechUnlocked = true;
+    state.speechUnlocking = false;
+    speakPendingPlayByPlay();
+  }
+
+  function speakPendingPlayByPlay() {
+    if (!state.pendingPlayByPlaySpeech) return;
+    var pendingText = state.pendingPlayByPlaySpeech;
+    state.pendingPlayByPlaySpeech = "";
+    speakPlayByPlay(pendingText);
   }
 
   function stopPlayByPlaySpeech() {
+    state.pendingPlayByPlaySpeech = "";
     if ("speechSynthesis" in window) {
       window.speechSynthesis.cancel();
     }

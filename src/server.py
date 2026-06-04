@@ -4,13 +4,17 @@ import json
 import mimetypes
 import re
 from json import JSONDecodeError
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from urllib.parse import parse_qs, urlparse
+try:
+    from zoneinfo import ZoneInfo
+except Exception:  # pragma: no cover - Python runtime compatibility guard
+    ZoneInfo = None
 
 try:
     from nba_api.live.nba.endpoints import scoreboard
@@ -25,6 +29,13 @@ try:
 except Exception as exc:  # pragma: no cover - reported through /api/playbyplay
     playbyplay = None
     playbyplay_import_error = exc
+
+try:
+    from nba_api.stats.endpoints import scheduleleaguev2
+    scheduleleaguev2_import_error = None
+except Exception as exc:  # pragma: no cover - schedule enrichment is optional
+    scheduleleaguev2 = None
+    scheduleleaguev2_import_error = exc
 
 
 ROOT = Path(__file__).resolve().parent
@@ -43,6 +54,28 @@ NBA_REQUEST_HEADERS = {
         "Chrome/125.0.0.0 Safari/537.36"
     ),
 }
+SCHEDULE_CACHE_TTL = timedelta(minutes=15)
+SCHEDULE_METADATA_FIELDS = (
+    "seriesGameNumber",
+    "seriesText",
+    "gameLabel",
+    "gameSubLabel",
+    "gameSubtype",
+    "ifNecessary",
+)
+_schedule_metadata_cache: dict[str, tuple[datetime, dict[str, dict[str, Any]]]] = {}
+
+
+def _pacific_timezone() -> tzinfo:
+    if ZoneInfo is not None:
+        try:
+            return ZoneInfo("America/Los_Angeles")
+        except Exception:
+            pass
+    return timezone(timedelta(hours=-8), "PST")
+
+
+PACIFIC_TZ = _pacific_timezone()
 
 
 def _value(data: dict[str, Any], *keys: str, default: Any = "") -> Any:
@@ -85,14 +118,105 @@ def _format_clock(clock: Any) -> str:
 def _start_time(game: dict[str, Any]) -> str:
     raw = _value(game, "gameTimeUTC", "gameTimeLocal", "gameEt")
     if not raw:
-        return _value(game, "gameStatusText", default="TBD")
+        return "TBD"
     try:
         cleaned = str(raw).replace("Z", "+00:00")
         dt = datetime.fromisoformat(cleaned)
-        local = dt.astimezone()
-        return local.strftime("%I:%M %p").lstrip("0")
+        pacific = dt.astimezone(PACIFIC_TZ)
+        return pacific.strftime("%I:%M %p").lstrip("0") + " PST"
     except Exception:
         return str(raw)
+
+
+def _season_for_game_date(game_date: Any) -> str:
+    parsed = None
+    if game_date:
+        text = str(game_date).strip().replace("Z", "+00:00")
+        for candidate in (text, text[:10]):
+            try:
+                parsed = datetime.fromisoformat(candidate)
+                break
+            except ValueError:
+                pass
+
+    if parsed is None:
+        parsed = datetime.now(PACIFIC_TZ)
+
+    start_year = parsed.year - 1 if parsed.month <= 9 else parsed.year
+    return f"{start_year}-{str(start_year + 1)[-2:]}"
+
+
+def _dataset_rows(data_set: Any) -> list[dict[str, Any]]:
+    data = data_set.get_dict() if hasattr(data_set, "get_dict") else data_set
+    if not isinstance(data, dict):
+        return []
+
+    headers = data.get("headers") or []
+    rows = data.get("data") or []
+    normalized = []
+    for row in rows:
+        if isinstance(row, dict):
+            normalized.append(row)
+        elif isinstance(row, list) and headers:
+            normalized.append({header: row[index] if index < len(row) else "" for index, header in enumerate(headers)})
+    return normalized
+
+
+def _schedule_metadata_by_game_id(season: str) -> dict[str, dict[str, Any]]:
+    now = datetime.now(timezone.utc)
+    cached = _schedule_metadata_cache.get(season)
+    if cached and now - cached[0] < SCHEDULE_CACHE_TTL:
+        return cached[1]
+
+    if scheduleleaguev2 is None:
+        reason = f": {scheduleleaguev2_import_error}" if scheduleleaguev2_import_error else ""
+        raise RuntimeError(f"nba_api schedule import failed{reason}")
+
+    schedule = scheduleleaguev2.ScheduleLeagueV2(season=season, timeout=10)
+    metadata: dict[str, dict[str, Any]] = {}
+    for row in _dataset_rows(schedule.season_games):
+        game_id = str(_value(row, "gameId")).strip()
+        if not game_id:
+            continue
+        metadata[game_id] = {
+            field: row.get(field, "")
+            for field in SCHEDULE_METADATA_FIELDS
+            if row.get(field, "") not in (None, "")
+        }
+
+    _schedule_metadata_cache[season] = (now, metadata)
+    return metadata
+
+
+def _merge_schedule_metadata(game: dict[str, Any], metadata: dict[str, Any]) -> None:
+    if not metadata:
+        return
+
+    for field in SCHEDULE_METADATA_FIELDS:
+        current = game.get(field, "")
+        incoming = metadata.get(field, "")
+        if incoming in (None, ""):
+            continue
+        if field == "seriesGameNumber" and str(incoming).strip() == "0":
+            continue
+        if current in (None, "", 0, "0"):
+            game[field] = incoming
+
+
+def _enrich_series_metadata(games: list[dict[str, Any]], game_date: Any) -> None:
+    if not games:
+        return
+
+    try:
+        season = _season_for_game_date(game_date)
+        schedule_metadata = _schedule_metadata_by_game_id(season)
+    except Exception as exc:
+        print(f"Schedule metadata unavailable: {exc}")
+        return
+
+    for game in games:
+        game_id = str(game.get("gameId", "")).strip()
+        _merge_schedule_metadata(game, schedule_metadata.get(game_id, {}))
 
 
 def _normalize_game(game: dict[str, Any], fetched_at: str) -> dict[str, Any]:
@@ -112,6 +236,12 @@ def _normalize_game(game: dict[str, Any], fetched_at: str) -> dict[str, Any]:
         "period": int(_value(game, "period", default=0) or 0),
         "clock": _format_clock(_value(game, "gameClock", "clock")),
         "startTime": _start_time(game),
+        "seriesGameNumber": _value(game, "seriesGameNumber", default=""),
+        "seriesText": _value(game, "seriesText", default=""),
+        "gameLabel": _value(game, "gameLabel", default=""),
+        "gameSubLabel": _value(game, "gameSubLabel", default=""),
+        "gameSubtype": _value(game, "gameSubtype", default=""),
+        "ifNecessary": _value(game, "ifNecessary", default=""),
         "arena": arena_name,
         "away": away,
         "home": home,
@@ -218,6 +348,7 @@ def get_scoreboard() -> dict[str, Any]:
     games = payload.get("scoreboard", {}).get("games", [])
 
     normalized = [_normalize_game(game, fetched_at) for game in games]
+    _enrich_series_metadata(normalized, payload.get("scoreboard", {}).get("gameDate"))
     normalized.sort(key=lambda game: (game["status"] != 2, game["startTime"], game["gameId"]))
 
     return {

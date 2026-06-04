@@ -55,7 +55,8 @@ p {
 }
 
 .game-status {
-  min-width: 84px;
+  justify-self: start;
+  min-width: 112px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -64,8 +65,9 @@ p {
   border: 1px solid var(--line);
   background: var(--surface-2);
   color: var(--text-soft);
-  font-size: 14px;
-  font-weight: 700;
+  font-size: 18px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
@@ -100,29 +102,12 @@ p {
 
 .game-meta-row {
   display: grid;
-  grid-template-columns: minmax(112px, 1fr) auto minmax(112px, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(112px, 1fr);
   align-items: center;
   gap: 16px;
   color: var(--text-muted);
   font-size: 16px;
   font-weight: 700;
-}
-
-.game-clock {
-  justify-self: center;
-  min-width: 112px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 7px 12px;
-  border-radius: 999px;
-  border: 1px solid var(--line);
-  background: var(--surface-3);
-  color: var(--text);
-  font-size: 18px;
-  font-weight: 900;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
 }
 
 #game-count {
@@ -155,6 +140,11 @@ p {
   gap: 24px;
 }
 
+.matchup-row.has-series {
+  grid-template-columns: minmax(0, 1fr) minmax(72px, auto) minmax(0, 1fr);
+  gap: 14px;
+}
+
 .team-row {
   min-width: 0;
   min-height: 0;
@@ -164,6 +154,26 @@ p {
   justify-content: center;
   gap: 18px;
   text-align: center;
+  transition: transform 180ms ease;
+}
+
+.series-record {
+  align-self: center;
+  justify-self: center;
+  min-width: 72px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--surface-3);
+  color: var(--text-soft);
+  font-size: 28px;
+  line-height: 1;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
   transition: transform 180ms ease;
 }
 
@@ -211,7 +221,8 @@ p {
   color: var(--accent);
 }
 
-.game-card.score-position-up .team-row {
+.game-card.score-position-up .team-row,
+.game-card.score-position-up .series-record {
   transform: translateY(-124px);
 }
 

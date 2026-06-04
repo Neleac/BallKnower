@@ -31,11 +31,10 @@
         <article id="game-card" class="game-card hidden">
           <div class="game-meta-row">
             <span id="game-status" class="game-status"></span>
-            <span id="game-clock" class="game-clock"></span>
             <span id="game-count"></span>
           </div>
 
-          <div class="matchup-row">
+          <div id="matchup-row" class="matchup-row">
             <div class="team-row" id="away-row">
               <div class="team-label">
                 <span id="away-code" class="team-code"></span>
@@ -43,6 +42,8 @@
               </div>
               <div id="away-score" class="team-score"></div>
             </div>
+
+            <div id="series-record" class="series-record hidden" aria-label="Series record"></div>
 
             <div class="team-row" id="home-row">
               <div class="team-label">

@@ -1,4 +1,4 @@
-var CACHE_NAME = "ballknower-static-v16";
+var CACHE_NAME = "ballknower-static-v25";
 var STATIC_URLS = [
   "/",
   "/index.html",
