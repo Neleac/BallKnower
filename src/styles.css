@@ -29,6 +29,16 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
+html.install-mode,
+body.install-mode {
+  width: 100%;
+  min-width: 320px;
+  height: auto;
+  min-height: 100%;
+  overflow: auto;
+  background: #090b0f;
+}
+
 #app {
   width: 600px;
   height: 600px;
@@ -52,6 +62,151 @@ body {
 h2,
 p {
   margin: 0;
+}
+
+.install-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+  background:
+    linear-gradient(180deg, rgba(57, 217, 138, 0.11), transparent 34%),
+    #090b0f;
+}
+
+.install-content {
+  width: min(920px, 100%);
+  display: grid;
+  gap: 28px;
+}
+
+.install-brand {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.install-mark {
+  width: 64px;
+  height: 64px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--accent);
+  font-size: 22px;
+  line-height: 1;
+  font-weight: 900;
+}
+
+.install-brand h1 {
+  margin: 0;
+  color: var(--text);
+  font-size: 34px;
+  line-height: 1.05;
+  font-weight: 900;
+}
+
+.install-brand p,
+.install-copy p,
+.install-mobile p {
+  color: var(--text-soft);
+  font-size: 18px;
+  line-height: 1.42;
+}
+
+.install-desktop {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  align-items: center;
+  gap: 30px;
+  padding: 28px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+}
+
+.install-qr {
+  width: 320px;
+  height: 320px;
+  display: block;
+  border-radius: var(--radius);
+  background: #ffffff;
+}
+
+.install-copy {
+  display: grid;
+  gap: 14px;
+}
+
+.install-copy h2 {
+  color: var(--text);
+  font-size: 28px;
+  line-height: 1.1;
+  font-weight: 900;
+}
+
+.install-url {
+  max-width: 100%;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--surface-3);
+  color: var(--text);
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.install-mobile {
+  display: grid;
+  gap: 18px;
+  padding: 24px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+}
+
+.install-action {
+  min-height: 88px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 24px;
+  border-radius: var(--radius);
+  background: var(--accent-2);
+  color: #07120c;
+  font-size: 22px;
+  line-height: 1;
+  font-weight: 900;
+  text-decoration: none;
+}
+
+.install-action:focus-visible {
+  outline: none;
+  box-shadow: 0 0 20px rgba(123, 220, 255, 0.5);
+}
+
+@media (max-width: 720px) {
+  .install-page {
+    align-items: stretch;
+    padding: 20px;
+  }
+
+  .install-content {
+    align-content: center;
+  }
+
+  .install-brand {
+    align-items: flex-start;
+  }
+
+  .install-brand h1 {
+    font-size: 30px;
+  }
 }
 
 .game-status {

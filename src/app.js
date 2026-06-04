@@ -4,9 +4,10 @@
   var CONFIG = {
     endpoint: "/api/scoreboard",
     playByPlayEndpoint: "/api/playbyplay",
-    refreshMs: 30000,
+    refreshMs: 10000,
     playByPlayRefreshMs: 15000,
     cacheKey: "ballknower:lastScoreboard",
+    appName: "BallKnower",
   };
 
   var OPENING_CLOCK_TEXT = "Q1 12:00";
@@ -71,6 +72,47 @@
         startPlayByPlayRefresh();
       }
     });
+  }
+
+  function installAppUrl() {
+    return window.location.origin + "/?display=1";
+  }
+
+  function installDeepLink() {
+    return "fb-viewapp://web_app_deep_link?appName=" + encodeURIComponent(CONFIG.appName) +
+      "&appUrl=" + encodeURIComponent(installAppUrl());
+  }
+
+  function isMobileBrowser() {
+    var userAgent = navigator.userAgent || "";
+    return /Android|iPhone|iPad|iPod|Mobile/i.test(userAgent) ||
+      (navigator.maxTouchPoints > 0 && Math.min(window.screen.width, window.screen.height) < 760);
+  }
+
+  function isLocalHost() {
+    return /^(localhost|127\.0\.0\.1|\[::1\])$/.test(window.location.hostname);
+  }
+
+  function shouldShowInstallPage() {
+    var params = new URLSearchParams(window.location.search);
+    if (params.get("display") === "1") return false;
+    if (params.get("install") === "1") return true;
+    return !isLocalHost();
+  }
+
+  function showInstallPage() {
+    var mobile = isMobileBrowser();
+    var viewport = document.querySelector("meta[name='viewport']");
+    if (viewport) viewport.setAttribute("content", "width=device-width, initial-scale=1.0");
+
+    document.documentElement.classList.add("install-mode");
+    document.body.classList.add("install-mode");
+    setHidden("install-page", false);
+    setHidden("app", true);
+    setHidden("install-desktop", mobile);
+    setHidden("install-mobile", !mobile);
+    $("install-action").setAttribute("href", installDeepLink());
+    $("install-url").textContent = installAppUrl();
   }
 
   function loadCachedScoreboard() {
@@ -541,8 +583,14 @@
   }
 
   function init() {
-    setupEvents();
     registerServiceWorker();
+
+    if (shouldShowInstallPage()) {
+      showInstallPage();
+      return;
+    }
+
+    setupEvents();
     applyScorePosition();
     loadCachedScoreboard();
     loadScoreboard({ force: true });

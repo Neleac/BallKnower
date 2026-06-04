@@ -1,37 +1,53 @@
-# BallKnower
+# Ball Knower - NBA live score and play-by-play for Meta Ray-Ban Display
 
-Meta Ray-Ban Display web app for live NBA scores. The 600x600 frontend is plain HTML/CSS/JS for the glasses display, and `src/server.py` bridges the browser app to `swar/nba_api`.
+<p align="center">
+    <img src="ballknower.jpg" alt="BallKnower screenshot" width="360" />
+</p>
 
-## Run
+## Usage
+
+Scan the QR code to add to Meta AI app:
+
+<img src="src/qr-publish.png" alt="BallKnower web app QR code" width="240" />
+
+### Controls
+
+- D-pad up: show play-by-play
+- D-pad down: hide play-by-play
+- D-pad left: previous game
+- D-pad right: next game
+- Enter: refresh scores
+
+### Manual setup
+
+Open the Meta AI app.
+1. Go to Devices > Display Glasses settings.
+2. Open App connections > Web apps.
+3. Add a web app named BallKnower.
+4. Use https://nbaballknower.vercel.app/ as the URL.
+
+## Local Development
 
 Requires Python 3.10 or newer.
 
+Create virtual environment:
 ```powershell
 python -m venv .venv
+```
+
+Activate virtual environment:
+```powershell
 .\.venv\Scripts\Activate.ps1
+```
+
+Install dependencies:
+```powershell
 pip install -r requirements.txt
+```
+
+Run server:
+```powershell
 python src/server.py
 ```
 
 Open `http://127.0.0.1:8000`.
-
-## Controls
-
-- D-pad left: previous game
-- D-pad right: next game
-- Enter/tap: refresh scores
-
-The app refreshes scores every 30 seconds and caches the last successful scoreboard in local storage for offline fallback.
-
-## Troubleshooting
-
-If `/api/scoreboard` returns `503` with `Expecting value: line 1 column 1 (char 0)`, `nba_api` received an empty or non-JSON response from the NBA live scoreboard feed. The server tries the `nba_api` CDN endpoint first, then falls back to the NBA S3 mirror used in the scoreboard payload metadata.
-
-Open these URLs from the same machine to verify the upstream feeds are reachable:
-
-```text
-https://cdn.nba.com/static/json/liveData/scoreboard/todaysScoreboard_00.json
-https://nba-prod-us-east-1-mediaops-stats.s3.amazonaws.com/NBA/liveData/scoreboard/todaysScoreboard_00.json
-```
-
-If neither returns JSON, check your network, VPN, proxy, or retry after a short wait. If the S3 URL returns JSON, restart `python server.py` from the virtualenv where `requirements.txt` was installed.

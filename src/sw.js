@@ -1,4 +1,4 @@
-var CACHE_NAME = "ballknower-static-v25";
+var CACHE_NAME = "ballknower-static-v29";
 var STATIC_URLS = [
   "/",
   "/index.html",
@@ -6,6 +6,7 @@ var STATIC_URLS = [
   "/app.js",
   "/manifest.webmanifest",
   "/favicon.png",
+  "/qr-publish.png",
 ];
 
 self.addEventListener("install", function(event) {
@@ -30,6 +31,17 @@ self.addEventListener("activate", function(event) {
 self.addEventListener("fetch", function(event) {
   var url = new URL(event.request.url);
   if (url.pathname.indexOf("/api/") === 0) return;
+
+  if (event.request.mode === "navigate" || event.request.destination === "document") {
+    event.respondWith(
+      fetch(event.request).catch(function() {
+        return caches.match("/").then(function(cached) {
+          return cached || caches.match("/index.html");
+        });
+      })
+    );
+    return;
+  }
 
   event.respondWith(
     caches.match(event.request).then(function(cached) {

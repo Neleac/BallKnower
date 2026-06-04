@@ -9,6 +9,32 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <section id="install-page" class="install-page hidden" aria-labelledby="install-title">
+    <main class="install-content">
+      <div class="install-brand">
+        <span class="install-mark">BK</span>
+        <div>
+          <h1 id="install-title">BallKnower</h1>
+          <p>Live NBA scores for Meta Display Glasses.</p>
+        </div>
+      </div>
+
+      <div id="install-desktop" class="install-desktop">
+        <img class="install-qr" src="qr-publish.png" alt="QR code to add BallKnower to the Meta AI app">
+        <div class="install-copy">
+          <h2>Install on Glasses</h2>
+          <p>Scan this QR code with your phone camera. It opens the Meta AI app and adds BallKnower.</p>
+          <p class="install-url" id="install-url"></p>
+        </div>
+      </div>
+
+      <div id="install-mobile" class="install-mobile hidden">
+        <a id="install-action" class="install-action" href="#">Add BallKnower</a>
+        <p>Tap the button, approve the prompt in the Meta AI app, then open BallKnower from your glasses web apps.</p>
+      </div>
+    </main>
+  </section>
+
   <div id="app">
     <section id="home" class="screen" aria-label="Live NBA score">
       <main class="score-stage" aria-live="polite">
