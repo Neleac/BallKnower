@@ -1,8 +1,9 @@
 # NBA live score and play-by-play for Meta Ray-Ban Display
 
-<p align="center">
+<div align="center">
     <img src="ballknower.jpg" alt="BallKnower screenshot" width="360" />
-</p>
+    <p> elite ball knowledge </p>
+</div>
 
 ## Usage
 
